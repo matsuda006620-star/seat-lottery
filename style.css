@@ -46,7 +46,15 @@ h1 {
   font-weight: bold;
   line-height: 1;
   color: #1565c0;
-  margin: 10px 0 20px;
+  margin: 10px 0 8px;
+}
+
+.my-result {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: bold;
+  color: #37474f;
+  min-height: 24px;
 }
 
 .buttons {
@@ -93,6 +101,7 @@ button:disabled {
   font-size: 18px;
   font-weight: bold;
   color: #2e7d32;
+  text-align: center;
 }
 
 .map-area {
@@ -152,7 +161,7 @@ button:disabled {
   height: 28px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.96);
   border: 2px solid #43a047;
   color: #1b5e20;
   font-size: 14px;
@@ -271,5 +280,11 @@ button:disabled {
     height: 22px;
     line-height: 18px;
     font-size: 11px;
+  }
+
+  .my-result,
+  .guide,
+  #dateText {
+    font-size: 16px;
   }
 }

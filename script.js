@@ -1,8 +1,49 @@
-const TOTAL_SEATS = 31;
-const LOTTERY_KEY = "lottery_state";
-const POSITION_KEY = "seat_positions";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js";
+import {
+  getFirestore,
+  doc,
+  onSnapshot,
+  runTransaction
+} from "https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js";
 
+/* =========================
+   Firebase設定
+========================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyDbjRxjquhAxUNqp_Y_kCz7I9yh9PFw0SA",
+  authDomain: "seat-lottery-57fb7.firebaseapp.com",
+  projectId: "seat-lottery-57fb7",
+  storageBucket: "seat-lottery-57fb7.firebasestorage.app",
+  messagingSenderId: "807925530514",
+  appId: "1:807925530514:web:c960085409ad19a1a94b4b"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const sharedDocRef = doc(db, "seatLottery", "shared");
+
+/* =========================
+   基本設定
+========================= */
+const TOTAL_SEATS = 31;
+
+/*
+  管理者用PIN
+  好きな4桁などに変えてください
+*/
+const ADMIN_PIN = "1234";
+
+/* =========================
+   ローカル保存キー
+========================= */
+const CLIENT_ID_KEY = "seatLottery_clientId";
+const MY_DRAW_KEY = "seatLottery_myDraw";
+
+/* =========================
+   DOM
+========================= */
 const resultEl = document.getElementById("result");
+const myResultTextEl = document.getElementById("myResultText");
 const drawBtn = document.getElementById("drawBtn");
 const settingsBtn = document.getElementById("settingsBtn");
 const resetBtn = document.getElementById("resetBtn");
@@ -17,100 +58,170 @@ const overlay = document.getElementById("overlay");
 const seatMap = document.getElementById("seatMap");
 const settingsModal = document.getElementById("settingsModal");
 
+/* =========================
+   状態
+========================= */
+let sharedState = {
+  date: "",
+  used: [],
+  last: null,
+  positions: {},
+  drawnClients: {}
+};
+
+let editMode = false;
+let currentSeat = 1;
+let positionsDraft = {};
+let animating = false;
+
+/* =========================
+   共通関数
+========================= */
 function todayString() {
   const d = new Date();
   return d.toISOString().slice(0, 10);
 }
 
-function loadLottery() {
-  const raw = localStorage.getItem(LOTTERY_KEY);
-  if (!raw) {
-    return { date: todayString(), used: [], last: null };
-  }
+function createClientId() {
+  return "client-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
 
+function getClientId() {
+  let clientId = localStorage.getItem(CLIENT_ID_KEY);
+  if (!clientId) {
+    clientId = createClientId();
+    localStorage.setItem(CLIENT_ID_KEY, clientId);
+  }
+  return clientId;
+}
+
+function getStoredMyDraw() {
   try {
-    const data = JSON.parse(raw);
-    if (data.date !== todayString()) {
-      return { date: todayString(), used: [], last: null };
-    }
-    return data;
+    return JSON.parse(localStorage.getItem(MY_DRAW_KEY)) || null;
   } catch {
-    return { date: todayString(), used: [], last: null };
+    return null;
   }
 }
 
-function saveLottery() {
-  localStorage.setItem(LOTTERY_KEY, JSON.stringify(state));
+function saveMyDraw(number) {
+  localStorage.setItem(MY_DRAW_KEY, JSON.stringify({
+    date: todayString(),
+    number
+  }));
 }
 
-function loadPositions() {
-  const raw = localStorage.getItem(POSITION_KEY);
-  if (!raw) return {};
+function clearMyDraw() {
+  localStorage.removeItem(MY_DRAW_KEY);
+}
 
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return {};
+function getMyNumberToday() {
+  const stored = getStoredMyDraw();
+  if (!stored) return null;
+  if (stored.date !== todayString()) {
+    clearMyDraw();
+    return null;
   }
+  return stored.number;
 }
 
-function savePositions() {
-  localStorage.setItem(POSITION_KEY, JSON.stringify(positions));
-}
-
-let state = loadLottery();
-let positions = loadPositions();
-let editMode = false;
-let currentSeat = 1;
-let animating = false;
-
-dateTextEl.textContent = "日付: " + todayString();
-
-function allPositionsSet() {
+function hasAllPositions() {
+  const positions = sharedState.positions || {};
   for (let i = 1; i <= TOTAL_SEATS; i++) {
     if (!positions[i]) return false;
   }
   return true;
 }
 
-function remainingNumbers() {
-  const result = [];
-  for (let i = 1; i <= TOTAL_SEATS; i++) {
-    if (!state.used.includes(i)) {
-      result.push(i);
-    }
-  }
-  return result;
+function defaultSharedState(existingPositions = {}) {
+  return {
+    date: todayString(),
+    used: [],
+    last: null,
+    positions: existingPositions,
+    drawnClients: {}
+  };
 }
 
+function normalizeState(data) {
+  if (!data) return defaultSharedState({});
+  return {
+    date: data.date || todayString(),
+    used: Array.isArray(data.used) ? data.used : [],
+    last: data.last ?? null,
+    positions: data.positions || {},
+    drawnClients: data.drawnClients || {}
+  };
+}
+
+async function ensureTodayState() {
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(sharedDocRef);
+
+    if (!snap.exists()) {
+      transaction.set(sharedDocRef, defaultSharedState({}));
+      return;
+    }
+
+    const data = normalizeState(snap.data());
+
+    if (data.date !== todayString()) {
+      transaction.set(sharedDocRef, defaultSharedState(data.positions));
+    }
+  });
+}
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/* =========================
+   表示
+========================= */
 function updateGuide() {
   if (editMode) {
     guideTextEl.textContent = `${currentSeat}番の中心をクリック`;
     return;
   }
 
-  const count = Object.keys(positions).length;
-  if (count < TOTAL_SEATS) {
-    guideTextEl.textContent = `配置未完了: ${count}/${TOTAL_SEATS} 登録済み`;
+  if (!hasAllPositions()) {
+    guideTextEl.textContent = "管理者がまだ座標設定を完了していません";
+    return;
+  }
+
+  const myNumber = getMyNumberToday();
+  if (myNumber !== null) {
+    guideTextEl.textContent = "この端末は本日すでに抽選済みです";
     return;
   }
 
   guideTextEl.textContent = "";
 }
 
-function drawOverlay() {
+function updateMyResultText() {
+  const myNumber = getMyNumberToday();
+  if (myNumber === null) {
+    myResultTextEl.textContent = "この端末の本日の番号: まだ引いていません";
+  } else {
+    myResultTextEl.textContent = `この端末の本日の番号: ${myNumber}`;
+  }
+}
+
+function renderOverlay() {
   overlay.innerHTML = "";
 
+  const sourcePositions = editMode ? positionsDraft : (sharedState.positions || {});
+
   for (let i = 1; i <= TOTAL_SEATS; i++) {
-    if (!positions[i]) continue;
+    const pos = sourcePositions[i];
+    if (!pos) continue;
 
     const marker = document.createElement("div");
     marker.className = "marker";
     marker.id = `marker-${i}`;
-    marker.style.left = positions[i].x + "%";
-    marker.style.top = positions[i].y + "%";
+    marker.style.left = pos.x + "%";
+    marker.style.top = pos.y + "%";
 
-    if (state.used.includes(i)) {
+    if (!editMode && Array.isArray(sharedState.used) && sharedState.used.includes(i)) {
       marker.classList.add("used");
     }
 
@@ -120,27 +231,84 @@ function drawOverlay() {
       const label = document.createElement("div");
       label.className = "point-label";
       label.textContent = i;
-      label.style.left = positions[i].x + "%";
-      label.style.top = positions[i].y + "%";
+      label.style.left = pos.x + "%";
+      label.style.top = pos.y + "%";
       overlay.appendChild(label);
     }
   }
 }
 
 function render() {
-  resultEl.textContent = state.last ?? "--";
-  remainingTextEl.textContent = "残り: " + (TOTAL_SEATS - state.used.length);
-  updateGuide();
-  drawOverlay();
+  dateTextEl.textContent = "日付: " + todayString();
+  resultEl.textContent = sharedState.last ?? "--";
+  remainingTextEl.textContent = "残り: " + (TOTAL_SEATS - (sharedState.used || []).length);
 
-  drawBtn.disabled = animating || editMode || !allPositionsSet();
+  updateMyResultText();
+  updateGuide();
+  renderOverlay();
+
+  const myNumber = getMyNumberToday();
+
+  drawBtn.disabled =
+    animating ||
+    editMode ||
+    !hasAllPositions() ||
+    myNumber !== null;
+
   settingsBtn.disabled = animating;
   editBtn.disabled = animating;
   clearBtn.disabled = animating;
   resetBtn.disabled = animating;
 }
 
+/* =========================
+   共有同期
+========================= */
+async function subscribeSharedState() {
+  await ensureTodayState();
+
+  onSnapshot(sharedDocRef, async (snap) => {
+    if (!snap.exists()) {
+      await ensureTodayState();
+      return;
+    }
+
+    const data = normalizeState(snap.data());
+
+    if (data.date !== todayString()) {
+      await ensureTodayState();
+      return;
+    }
+
+    sharedState = data;
+
+    const clientId = getClientId();
+    const myServerNumber = sharedState.drawnClients?.[clientId];
+    if (myServerNumber != null) {
+      saveMyDraw(myServerNumber);
+    } else {
+      const local = getStoredMyDraw();
+      if (local && local.date !== todayString()) {
+        clearMyDraw();
+      }
+    }
+
+    render();
+  });
+}
+
+/* =========================
+   設定
+========================= */
 function openSettings() {
+  const pin = prompt("管理者PINを入力してください");
+  if (pin === null) return;
+
+  if (pin !== ADMIN_PIN) {
+    alert("PINが違います");
+    return;
+  }
+
   settingsModal.classList.remove("hidden");
 }
 
@@ -159,101 +327,184 @@ function startEditMode() {
 
   editMode = true;
   currentSeat = 1;
-  positions = {};
-  savePositions();
+  positionsDraft = {};
   settingsModal.classList.add("hidden");
   render();
 }
 
-function clearPositions() {
+async function clearPositions() {
   if (!confirm("登録した座標を全部消しますか？")) return;
-  positions = {};
-  savePositions();
-  render();
+
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(sharedDocRef);
+    const data = snap.exists() ? normalizeState(snap.data()) : defaultSharedState({});
+    data.positions = {};
+    transaction.set(sharedDocRef, data);
+  });
+
+  alert("座標を消しました");
 }
 
-function mapClick(event) {
+async function resetLottery() {
+  if (!confirm("本日の抽選をリセットしますか？")) return;
+
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(sharedDocRef);
+    const data = snap.exists() ? normalizeState(snap.data()) : defaultSharedState({});
+    transaction.set(sharedDocRef, defaultSharedState(data.positions));
+  });
+
+  clearMyDraw();
+  settingsModal.classList.add("hidden");
+}
+
+/* =========================
+   座標登録
+========================= */
+async function finishEditMode() {
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(sharedDocRef);
+    const data = snap.exists() ? normalizeState(snap.data()) : defaultSharedState({});
+    data.positions = positionsDraft;
+    transaction.set(sharedDocRef, data);
+  });
+
+  editMode = false;
+  alert("31席の登録が完了しました");
+}
+
+async function handleMapClick(event) {
   if (!editMode) return;
 
   const rect = seatMap.getBoundingClientRect();
   const x = ((event.clientX - rect.left) / rect.width) * 100;
   const y = ((event.clientY - rect.top) / rect.height) * 100;
 
-  positions[currentSeat] = {
+  positionsDraft[currentSeat] = {
     x: Number(x.toFixed(2)),
     y: Number(y.toFixed(2))
   };
 
-  savePositions();
-
   currentSeat += 1;
+  render();
 
   if (currentSeat > TOTAL_SEATS) {
-    editMode = false;
-    alert("31席の登録が完了しました");
+    await finishEditMode();
   }
-
-  render();
 }
 
-function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
+/* =========================
+   抽選
+========================= */
 async function drawLottery() {
   if (animating) return;
-  if (!allPositionsSet()) {
-    alert("先に設定から配置調整を行ってください");
+
+  if (!hasAllPositions()) {
+    alert("管理者が先に座標設定を行ってください");
     return;
   }
 
-  const remain = remainingNumbers();
-  if (remain.length === 0) {
-    alert("本日の抽選は終了しました");
+  const clientId = getClientId();
+  const localMyNumber = getMyNumberToday();
+  if (localMyNumber !== null) {
+    alert(`この端末は本日すでに ${localMyNumber} 番を引いています`);
     return;
   }
 
-  animating = true;
-  render();
+  try {
+    animating = true;
+    render();
 
-  const picked = remain[Math.floor(Math.random() * remain.length)];
-  resultEl.textContent = picked;
+    const result = await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(sharedDocRef);
 
-  const marker = document.getElementById(`marker-${picked}`);
-  if (marker) {
-    marker.classList.add("blinking");
+      let data = snap.exists()
+        ? normalizeState(snap.data())
+        : defaultSharedState({});
+
+      if (data.date !== todayString()) {
+        data = defaultSharedState(data.positions);
+      }
+
+      if (!data.positions || Object.keys(data.positions).length < TOTAL_SEATS) {
+        throw new Error("管理者が座標設定を完了していません");
+      }
+
+      if (data.drawnClients?.[clientId] != null) {
+        return {
+          already: true,
+          number: data.drawnClients[clientId]
+        };
+      }
+
+      const remaining = [];
+      for (let i = 1; i <= TOTAL_SEATS; i++) {
+        if (!data.used.includes(i)) remaining.push(i);
+      }
+
+      if (remaining.length === 0) {
+        throw new Error("本日の抽選は終了しました");
+      }
+
+      const picked = remaining[Math.floor(Math.random() * remaining.length)];
+
+      data.used = [...data.used, picked];
+      data.last = picked;
+      data.drawnClients = {
+        ...data.drawnClients,
+        [clientId]: picked
+      };
+
+      transaction.set(sharedDocRef, data);
+
+      return {
+        already: false,
+        number: picked
+      };
+    });
+
+    const picked = result.number;
+    saveMyDraw(picked);
+    resultEl.textContent = picked;
+    updateMyResultText();
+
+    const marker = document.getElementById(`marker-${picked}`);
+    if (marker && !result.already) {
+      marker.classList.add("blinking");
+      await wait(1250);
+    }
+
+    if (result.already) {
+      alert(`この端末は本日すでに ${picked} 番を引いています`);
+    }
+  } catch (error) {
+    alert(error.message || "抽選に失敗しました");
+  } finally {
+    animating = false;
+    render();
   }
-
-  await wait(1250);
-
-  state.used.push(picked);
-  state.last = picked;
-  saveLottery();
-
-  animating = false;
-  render();
 }
 
-function resetLottery() {
-  if (!confirm("本日の抽選をリセットしますか？")) return;
-  state = { date: todayString(), used: [], last: null };
-  saveLottery();
-  settingsModal.classList.add("hidden");
-  render();
-}
-
+/* =========================
+   イベント
+========================= */
 settingsBtn.addEventListener("click", openSettings);
 closeSettingsBtn.addEventListener("click", closeSettings);
+
 settingsModal.addEventListener("click", (event) => {
   if (event.target === settingsModal && !editMode) {
     closeSettings();
   }
 });
 
-mapArea.addEventListener("click", mapClick);
-drawBtn.addEventListener("click", drawLottery);
-resetBtn.addEventListener("click", resetLottery);
 editBtn.addEventListener("click", startEditMode);
 clearBtn.addEventListener("click", clearPositions);
+resetBtn.addEventListener("click", resetLottery);
+drawBtn.addEventListener("click", drawLottery);
+mapArea.addEventListener("click", handleMapClick);
 
+/* =========================
+   初期化
+========================= */
+subscribeSharedState();
 render();
