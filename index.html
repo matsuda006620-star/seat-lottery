@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>席くじ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <div class="top-panel">
+      <h1>席くじ</h1>
+      <p id="dateText"></p>
+
+      <div id="result" class="result">--</div>
+
+      <div class="buttons">
+        <button id="drawBtn">抽選する</button>
+        <button id="settingsBtn">設定</button>
+      </div>
+
+      <p id="remainingText"></p>
+      <p id="guideText" class="guide"></p>
+    </div>
+
+    <div class="bottom-panel">
+      <div id="mapArea" class="map-area">
+        <img id="seatMap" src="seatmap.jpg" alt="席次表">
+        <div id="overlay" class="overlay"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>設定</h2>
+
+      <div class="settings-buttons">
+        <button id="editBtn">配置調整モード</button>
+        <button id="clearBtn">座標を消す</button>
+        <button id="resetBtn">本日の抽選をリセット</button>
+      </div>
+
+      <button id="closeSettingsBtn" class="close-btn">閉じる</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
