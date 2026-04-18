@@ -26,11 +26,6 @@ const sharedDocRef = doc(db, "seatLottery", "shared");
    基本設定
 ========================= */
 const TOTAL_SEATS = 31;
-
-/*
-  管理者用PIN
-  好きな4桁などに変えてください
-*/
 const ADMIN_PIN = "1234";
 
 /* =========================
@@ -370,7 +365,9 @@ async function finishEditMode() {
   });
 
   editMode = false;
+  currentSeat = 1;
   alert("31席の登録が完了しました");
+  render();
 }
 
 async function handleMapClick(event) {
@@ -385,12 +382,13 @@ async function handleMapClick(event) {
     y: Number(y.toFixed(2))
   };
 
+  if (currentSeat >= TOTAL_SEATS) {
+    await finishEditMode();
+    return;
+  }
+
   currentSeat += 1;
   render();
-
-  if (currentSeat > TOTAL_SEATS) {
-    await finishEditMode();
-  }
 }
 
 /* =========================
